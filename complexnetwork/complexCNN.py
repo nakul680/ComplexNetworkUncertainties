@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from complexPytorch import softmax_real_with_avg, softmax_real_with_abs, softmax_real_with_mult, \
+    softmax_of_softmax_real_with_avg, softmax_complex
 from complexPytorch.complexLayers import (ComplexBatchNorm1d, ComplexReLU, ComplexLinear,
                                           ComplexDropout, ComplexMaxPool1d)
 
@@ -10,6 +12,7 @@ from complexPytorch.complexLayers import (ComplexBatchNorm1d, ComplexReLU, Compl
 
 
 class ComplexCNN(nn.Module):
+    is_complex = True
     def __init__(self, num_classes):
         super(ComplexCNN, self).__init__()
 
@@ -37,6 +40,7 @@ class ComplexCNN(nn.Module):
         self.crelu5 = ComplexReLU()
         self.dropout2 = ComplexDropout(0.2)
         self.fc3 = nn.Linear(128, num_classes,dtype=torch.complex64)
+        self.real_fc3 = nn.Linear(256, 128)
         self.outlayer = nn.Linear(num_classes*2, num_classes)
 
 
@@ -55,15 +59,19 @@ class ComplexCNN(nn.Module):
         x = self.crelu5(self.fc2(x))
         x = self.dropout2(x)
         x = self.fc3(x)
-        x_real = torch.view_as_real(x)
+        # x = softmax_real_with_avg(x, dim=1)
+        # x = torch.log(x + 1e-8)
+        # x_real = torch.view_as_real(x)
         # x_real = x_real.view(x.size(0) * x_real.size(2), x_real.size(1))
-        x_real = x_real.flatten(start_dim=1)
-        x = self.outlayer(x_real)
-        # x_amp = x.abs()
+        # x_real = x_real.flatten(start_dim=1)
+        # x = self.real_fc3(x_real)
+        # x = self.outlayer(x_real)
+        # x = x.real
+        x = x.abs()
         # x_phase = torch.angle(x)
         # x = torch.cat([x_amp,x_phase], dim=-1)
         # x = x.flatten(start_dim=1)
-        # x = self.outlayer(x)
+        # x = self.outlayer(x_real)
 
         return x
 
@@ -80,7 +88,7 @@ class ComplexCNN(nn.Module):
         x = self.dropout1(x)
         x = self.crelu5(self.fc2(x))
         x = self.dropout2(x)
-        x = x.abs()
+        x = x.real
 
         return x
 

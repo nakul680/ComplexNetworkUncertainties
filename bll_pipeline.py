@@ -26,10 +26,14 @@ def bll_experiment(real_network, complex_network, train_loader, valid_loader, te
     }
 
     complex_model = BLLModel(complex_network, output_dim, {'num_classes': output_dim}, 'cuda', train_loader)
+    complex_params = sum(p.numel() for p in complex_model.parameters())
+    print(f"Complex Network Parameters: {complex_params}")
     complex_model.train_model(epochs, train_loader, valid_loader, torch.optim.Adam(complex_model.parameters(), lr=lr),
                               complex_logs)
 
     real_model = BLLModel(real_network, output_dim, {'num_classes': output_dim}, 'cuda', train_loader)
+    real_params = sum(p.numel() for p in real_model.parameters())
+    print(f"Real Network Parameters: {real_params}")
     real_model.train_model(epochs, train_loader, valid_loader, torch.optim.Adam(real_model.parameters(), lr=lr), logs)
 
     print("Testing complex model\n")

@@ -375,9 +375,9 @@ class DUQ(nn.Module):
 
         print(f"Test accuracy: {100 * correct / len(test_loader):.2f}%")
         print(f"Uncertainty: {uncertainty / len(test_loader):.4f}")
-        print(f"Avg max distance (correct): {sum(correct_max_distances) / len(correct_max_distances):.4f}")
+        print(f"Avg likelihood score (correct): {sum(correct_max_distances) / (len(correct_max_distances) if correct_max_distances else 1):.4f}")
         print(
-            f"Avg max distance (wrong): {sum(wrong_max_distances) / len(wrong_max_distances) if wrong_max_distances else 0:.4f}")
+            f"Avg likelihood score (wrong): {sum(wrong_max_distances) / len(wrong_max_distances) if wrong_max_distances else 0:.4f}")
 
         return all_max_distances, correct_max_distances, wrong_max_distances
 

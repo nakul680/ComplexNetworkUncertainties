@@ -5,6 +5,8 @@ import pickle
 
 from bll_pipeline import bll_experiment
 from complexnetwork.complexCNN import ComplexCNN
+from deepensemblepipeline import ensemble_experiment
+from duq_pipeline import duq_experiment
 from realnetwork.amc_cnn import AMC_CNN
 
 if __name__ == "__main__":
@@ -24,13 +26,13 @@ if __name__ == "__main__":
     # 1. SELECT ONE RANDOM CLASS AS OOD
     # ---------------------------------------------------
     np.random.seed(2016293)
-    ood_class_idx = np.random.randint(0, len(mods))
-    ood_class = mods[ood_class_idx]
+    ood_class_idx = np.random.choice(len(mods), size=5, replace=False)
+    ood_class = [mods[i] for i in ood_class_idx]
 
     print(f"\nOOD Class (removed from train/val): {ood_class}")
 
     # Separate in-distribution and OOD classes
-    id_mods = [mod for mod in mods if mod != ood_class]
+    id_mods = [mod for mod in mods if mod not in ood_class]
     print(f"In-Distribution Classes ({len(id_mods)}): {id_mods}")
 
     # ---------------------------------------------------
@@ -56,10 +58,10 @@ if __name__ == "__main__":
     y_ood_list = []
 
     for snr in snrs:
-        samples = p[(ood_class, snr)]
-        X_ood_list.append(samples)
-        # Keep original class index or use a special OOD label
-        y_ood_list += [100] * samples.shape[0]
+        for ood_c in ood_class:
+            samples = p[(ood_c, snr)]  # shape: [N, 2, 128]
+            X_ood_list.append(samples)
+            y_ood_list += [100] * samples.shape[0]  # 100 is the special OOD label
 
     X_ood = np.vstack(X_ood_list)
     Y_ood = np.array(y_ood_list)
@@ -138,11 +140,8 @@ if __name__ == "__main__":
     # test_dataset = ConcatDataset([test_dataset, ood_dataset])
     # test_loader = DataLoader(test_dataset, batch_size=110, shuffle=False)
 
-    bll_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods), 1, 0.0001, ood = True, ood_dataloader=ood_loader)
-
-
-
-
-
-
-
+    # bll_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods), 1, 0.0001, ood = True, ood_dataloader=ood_loader)
+    # duq_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods), 10, 0.0001, ood=True,
+    #                ood_loader=ood_loader)
+    ensemble_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods),
+                       5, epochs=10, ood=True, ood_loader=ood_loader)

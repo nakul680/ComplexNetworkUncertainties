@@ -93,7 +93,7 @@ class BLLModel(nn.Module):
             val_LOSS.append(val_loss / (i + 1))
             val_AC.append(val_acc / (i + 1))
 
-    def test_model(self, test_dataloader, ood = False):
+    def test_model(self, test_dataloader):
         self.eval()
         test_loss = 0.000
         test_acc = 0
@@ -102,6 +102,7 @@ class BLLModel(nn.Module):
         pred = []
         nll = []
         labels = []
+        entropy = []
         with torch.no_grad():
             for x, y in test_dataloader:
                 x = x.float().to(self.device)
@@ -112,13 +113,15 @@ class BLLModel(nn.Module):
                 labels.extend(y.cpu())
                 batch_preds = out.predictive.probs
                 pred.extend(batch_preds.cpu().numpy())
-                true_class_probs = batch_preds[torch.arange(batch_size), y].to('cpu')
+                predictive_entropy = -(batch_preds * torch.log(batch_preds + 1e-10)).sum(dim=1)
+                true_class_probs = batch_preds[torch.arange(batch_size), y]
                 total_nll += -torch.log(true_class_probs + 1e-10).mean()
                 nll.append(-torch.log(true_class_probs + 1e-10).mean())
                 loss = out.train_loss_fn(y)
                 test_loss += loss.item()
                 preds = batch_preds.argmax(dim=-1)
                 test_acc += (preds == y).float().mean().item()
+                entropy.extend(predictive_entropy.cpu().numpy())
 
         test_loss = test_loss / len(test_dataloader)
         test_acc = test_acc / len(test_dataloader)
@@ -127,6 +130,8 @@ class BLLModel(nn.Module):
         print(f"Test Accuracy: {test_acc:.4f}")
         print(f"Average NLL:{total_nll / test_dataloader.__len__():.4f}")
         print(f"ECE: {ece:.4f}")
+        print(f"Avg entropy for in distribution data:{np.mean(entropy):.4f}")
+
         #self.get_dist(x,y)
         prob_matrix = plot_class_prob_heatmap(self, test_dataloader, self.num_classes, self.device)
         # fig, axes = plt.subplots(4, 3, figsize=(12, 12))

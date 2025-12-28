@@ -10,6 +10,7 @@ class AMC_CNN(nn.Module):
     Input: [batch_size, 2, 128] (2 channels: I/Q, 128 time steps)
     Output: [batch_size, 11] (11 modulation classes)
     """
+    is_complex = False
 
     def __init__(self, num_classes=11):
         super(AMC_CNN, self).__init__()
@@ -47,6 +48,7 @@ class AMC_CNN(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.dropout2(x)
         x = self.fc3(x)
+        # x = F.log_softmax(x, dim=1)
         return x
 
     def compute_features(self, x):

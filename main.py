@@ -46,7 +46,7 @@ if __name__ == "__main__":
     # ---------------------------------------------------
     # 3. TRAIN/VAL/TEST SPLIT (correct indexing)
     # ---------------------------------------------------
-    np.random.seed(2016293)
+    np.random.seed(230983240)
 
     indices = np.arange(N)
     np.random.shuffle(indices)
@@ -86,13 +86,13 @@ if __name__ == "__main__":
     valid_loader = DataLoader(valid_dataset, batch_size=110, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=110, shuffle=True)
 
-    bll_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(mods), 10, 0.0001)
+    # bll_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(mods), 10, 0.0001)
 
 
-    # duq_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(mods), 10, 0.0001)
+    duq_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(mods), 10, 0.0001)
 
 
-    ensemble_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, output_dim=num_classes,num_models=5)
+    #ensemble_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, output_dim=num_classes,num_models=1, epochs=10)
 
 
 
