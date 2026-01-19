@@ -94,7 +94,7 @@ class TrueCDSCNN(nn.Module):
     """
     Complex-Valued Depthwise Separable Convolutional Neural Network (CDSCNN)
     """
-
+    is_complex = True
     def __init__(self, num_classes):
         """ Initialize a CDSCNN
         Args:

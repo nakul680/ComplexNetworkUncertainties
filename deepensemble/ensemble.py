@@ -4,7 +4,8 @@ from sympy.printing.pytorch import torch
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
-from complexPytorch import CrossEntropyComplex, softmax_real_with_abs, softmax_real_with_avg, CrossEntropyComplexTwice
+from complexPytorch import CrossEntropyComplex, softmax_real_with_abs, softmax_real_with_avg, CrossEntropyComplexTwice, \
+    softmax_complex
 from deepensemble.uncertainty import calculate_classification_uncertainty
 # from CDSCNN.train import train_one_epoch
 # from CDSCNN.validation import val
@@ -167,7 +168,9 @@ class DeepEnsemble:
         true_labels = torch.cat(all_labels, dim=0).numpy()
 
         # Calculate comprehensive uncertainty metrics
+
         metrics = calculate_classification_uncertainty(ensemble_predictions, true_labels)
+        print(f"Expected ID entropy: {metrics['expected_entropy_id']}")
 
         # Add loss to metrics
         # metrics['test_loss'] = test_loss / len(test_dataloader)
@@ -208,6 +211,7 @@ class DeepEnsemble:
         print(f"Avg Predictive Entropy: {metrics['predictive_entropy']:.4f}")
         print(f"Avg Mutual Information: {metrics['mutual_information']:.4f}")
         print(f"Avg Prediction Variance: {metrics['avg_prediction_variance']:.4f}")
+        print(f"ECE: {metrics['ece']:.4f}")
 
         return metrics
 

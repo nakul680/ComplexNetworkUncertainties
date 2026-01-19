@@ -33,8 +33,8 @@ class AMC_CNN(nn.Module):
         self.fc1 = nn.Linear(256 * 16, 256)
         self.dropout1 = nn.Dropout(0.4)
         self.fc2 = nn.Linear(256, 128)
-        self.dropout2 = nn.Dropout(0.2)
-        self.fc3 = nn.Linear(128, num_classes)
+        # self.dropout2 = nn.Dropout(0.2)
+        # self.fc3 = nn.Linear(128, num_classes)
 
     def forward(self, x):
         # x: [batch, 2, 128]
@@ -55,7 +55,7 @@ class AMC_CNN(nn.Module):
         """
         Extract feature embeddings before final classification layer
         Args:
-            x: Input tensor [batch, 2, 128]
+                complex_params = sum(p.numel() for p in complex_model.parameters())x: Input tensor [batch, 2, 128]
         Returns:
             Feature embeddings [batch, 128]
         """
@@ -70,8 +70,8 @@ class AMC_CNN(nn.Module):
         x = self.flatten(x)
         x = F.relu(self.fc1(x))
         x = self.dropout1(x)
-        x = F.relu(self.fc2(x))
-        x = self.dropout2(x)
+        x = self.fc2(x)
+#        x = self.dropout2(F.relu(x))
 
         # # Restore original training state
         # if was_training:

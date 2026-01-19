@@ -17,8 +17,6 @@ class CrossEntropyComplex(nn.Module):
         return - torch.sum((onehot + 1j * onehot) * torch.log(self.softmax(x))) / x.shape[0]
 
 class CrossEntropyComplexTwice(nn.Module):
-    # def forward(self, x, y):
-    #     return 0.5 * (nn.functional.cross_entropy(x.real, y.long()) + nn.functional.cross_entropy(x.imag, y.long()))
     def forward(self, x, y):
-        logits = x.real
-        return torch.nn.functional.cross_entropy(logits, y)
+        return 0.5 * (nn.functional.cross_entropy(x.real, y.long()) + nn.functional.cross_entropy(x.imag, y.long()))
+

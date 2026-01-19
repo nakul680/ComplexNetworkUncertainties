@@ -4,9 +4,11 @@ from torch.utils.data import TensorDataset, DataLoader, ConcatDataset
 import pickle
 
 from bll_pipeline import bll_experiment
+from complexnetwork.CDSCNN import TrueCDSCNN
 from complexnetwork.complexCNN import ComplexCNN
 from deepensemblepipeline import ensemble_experiment
 from duq_pipeline import duq_experiment
+from random_ood_data import RandomOODData
 from realnetwork.amc_cnn import AMC_CNN
 
 if __name__ == "__main__":
@@ -25,8 +27,10 @@ if __name__ == "__main__":
     # ---------------------------------------------------
     # 1. SELECT ONE RANDOM CLASS AS OOD
     # ---------------------------------------------------
-    np.random.seed(2016293)
-    ood_class_idx = np.random.choice(len(mods), size=5, replace=False)
+    # np.random.seed(2016293)
+    np.random.seed(20011008)
+    # ood_class_idx = np.random.choice(len(mods), size=5, replace=False)
+    ood_class_idx = [4,5,8,2,3]
     ood_class = [mods[i] for i in ood_class_idx]
 
     print(f"\nOOD Class (removed from train/val): {ood_class}")
@@ -140,8 +144,8 @@ if __name__ == "__main__":
     # test_dataset = ConcatDataset([test_dataset, ood_dataset])
     # test_loader = DataLoader(test_dataset, batch_size=110, shuffle=False)
 
-    # bll_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods), 1, 0.0001, ood = True, ood_dataloader=ood_loader)
-    # duq_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods), 10, 0.0001, ood=True,
-    #                ood_loader=ood_loader)
-    ensemble_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods),
-                       5, epochs=10, ood=True, ood_loader=ood_loader)
+    # bll_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods), 10, 0.0001, ood = True, ood_dataloader=ood_loader)
+    duq_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods), 10, 0.0001, ood=True,
+                   ood_loader=ood_loader)
+    # ensemble_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods),
+    #                    5, epochs=10, ood=True, ood_loader=ood_loader)

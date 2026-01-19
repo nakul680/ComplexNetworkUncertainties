@@ -90,7 +90,7 @@ class DUQ(nn.Module):
         diff = z - embeddings.unsqueeze(0)
 
         # Apply RBF kernel: exp(-||diff||^2 / (2 * sigma^2))
-        distances = (-(diff ** 2)).mean(1).div(2 * self.sigma ** 2).exp()
+        distances = ((diff ** 2)).mean(1).div(-2 * self.sigma ** 2).exp()
 
         return distances
 
@@ -269,9 +269,7 @@ class DUQ(nn.Module):
 
                 if lgp != 0:
                     gp_loss = self.calc_gradient_penalty(x)
-
-                # Total loss
-                if lgp != 0:
+                    epoch_gp_loss += gp_loss.item()
                     loss = ce_loss + lgp * gp_loss
                 else:
                     loss = ce_loss
@@ -354,6 +352,8 @@ class DUQ(nn.Module):
         all_max_distances = []
         correct_max_distances = []
         wrong_max_distances = []
+        results_all = []
+        labels_all = []
 
         with torch.no_grad():
             for x, y in test_loader:
@@ -366,6 +366,8 @@ class DUQ(nn.Module):
                 max_distances = out.max(dim=1).values
                 uncertainty += max_distances.mean().item()
                 correct += (result == y).float().mean().item()
+                results_all.append(result.cpu())
+                labels_all.append(y.cpu())
 
                 # Separate correct and incorrect predictions
                 correct_mask = (result == y)
@@ -373,13 +375,16 @@ class DUQ(nn.Module):
                 wrong_max_distances.extend(max_distances[~correct_mask].tolist())
                 all_max_distances.extend(max_distances.tolist())
 
+        results_all = torch.cat(results_all)
+        labels_all = torch.cat(labels_all)
+
         print(f"Test accuracy: {100 * correct / len(test_loader):.2f}%")
-        print(f"Uncertainty: {uncertainty / len(test_loader):.4f}")
+        print(f"Avg likelihood score: {uncertainty / len(test_loader):.4f}")
         print(f"Avg likelihood score (correct): {sum(correct_max_distances) / (len(correct_max_distances) if correct_max_distances else 1):.4f}")
         print(
             f"Avg likelihood score (wrong): {sum(wrong_max_distances) / len(wrong_max_distances) if wrong_max_distances else 0:.4f}")
 
-        return all_max_distances, correct_max_distances, wrong_max_distances
+        return all_max_distances, correct_max_distances, wrong_max_distances, results_all, labels_all
 
 
 

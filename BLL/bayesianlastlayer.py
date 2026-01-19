@@ -5,23 +5,25 @@ from matplotlib import pyplot as plt
 from torch import nn
 from torch.utils.data import DataLoader
 
-from heatmap import plot_class_prob_heatmap
+from heatmap import plot_class_prob_heatmap, compute_ece
 
 
 # from heatmap import plot_uncertainty_heatmap, plot_uncertainty_surface
 
 
 class BLLModel(nn.Module):
-    def __init__(self, backbone, num_classes: int, model_kwargs, device, train_dataloader: DataLoader):
+    def __init__(self, backbone, num_classes: int, feature_dim: int, model_kwargs, device,
+                 train_dataloader: DataLoader):
         super(BLLModel, self).__init__()
         self.backbone = backbone(**model_kwargs).to(device)
         self.num_classes = num_classes
-        self.bll_layer = vbll.DiscClassification(self.num_classes, self.num_classes,
-                                                 1. / train_dataloader.__len__()).to(device)
+        self.feature_dim = feature_dim
+        self.bll_layer = vbll.DiscClassification(self.feature_dim, self.num_classes,
+                                                0.5 / train_dataloader.__len__()).to(device)
         self.device = device
 
     def forward(self, x):
-        x = self.backbone(x)
+        x = self.backbone.compute_features(x)
         x = self.bll_layer(x)
         return x
 
@@ -93,63 +95,95 @@ class BLLModel(nn.Module):
             val_LOSS.append(val_loss / (i + 1))
             val_AC.append(val_acc / (i + 1))
 
-    def test_model(self, test_dataloader):
+    def test_model(self, dataloader, is_ood=False, n_samples=1):
         self.eval()
-        test_loss = 0.000
-        test_acc = 0
-        total_nll = 0.00
-        batch_size = test_dataloader.batch_size
-        pred = []
-        nll = []
-        labels = []
-        entropy = []
+
+        test_loss = 0.0
+        test_acc = 0.0
+        total_nll = 0.0
+
+        probs_all = []
+        preds_all = []
+        labels_all = []
+        max_probs_all = []
+        entropy_all = []
+
         with torch.no_grad():
-            for x, y in test_dataloader:
+            for x, y in dataloader:
                 x = x.float().to(self.device)
                 y = y.long().to(self.device)
 
+                # CRITICAL FIX: Sample multiple times from posterior
+                sampled_probs = []
+                for _ in range(n_samples):
+                    out = self(x)
+                    sampled_probs.append(out.predictive.probs)
 
-                out = self(x)
-                labels.extend(y.cpu())
-                batch_preds = out.predictive.probs
-                pred.extend(batch_preds.cpu().numpy())
-                predictive_entropy = -(batch_preds * torch.log(batch_preds + 1e-10)).sum(dim=1)
-                true_class_probs = batch_preds[torch.arange(batch_size), y]
-                total_nll += -torch.log(true_class_probs + 1e-10).mean()
-                nll.append(-torch.log(true_class_probs + 1e-10).mean())
-                loss = out.train_loss_fn(y)
-                test_loss += loss.item()
-                preds = batch_preds.argmax(dim=-1)
-                test_acc += (preds == y).float().mean().item()
-                entropy.extend(predictive_entropy.cpu().numpy())
+                # Average predictions across samples
+                sampled_probs = torch.stack(sampled_probs)  # (n_samples, B, C)
+                probs = sampled_probs.mean(dim=0)  # (B, C) - predictive mean
 
-        test_loss = test_loss / len(test_dataloader)
-        test_acc = test_acc / len(test_dataloader)
-        ece = self.compute_ece(pred, labels)
-        print(f"Test Loss: {test_loss:.4f}")
-        print(f"Test Accuracy: {test_acc:.4f}")
-        print(f"Average NLL:{total_nll / test_dataloader.__len__():.4f}")
-        print(f"ECE: {ece:.4f}")
-        print(f"Avg entropy for in distribution data:{np.mean(entropy):.4f}")
+                # Compute epistemic uncertainty (optional but useful)
+                epistemic_entropy = -(probs * torch.log(probs + 1e-10)).sum(dim=1)
+                aleatoric_entropy = (-(sampled_probs * torch.log(sampled_probs + 1e-10)).sum(dim=2)).mean(dim=0)
+                total_entropy = epistemic_entropy
 
-        #self.get_dist(x,y)
-        prob_matrix = plot_class_prob_heatmap(self, test_dataloader, self.num_classes, self.device)
-        # fig, axes = plt.subplots(4, 3, figsize=(12, 12))
-        # axes = axes.flatten()
-        #
-        # for i, (arr, ax) in enumerate(zip(prob_matrix, axes)):
-        #     colors = ['skyblue'] * len(batch_preds)  # default color for all
-        #     colors[i] = 'orange'
-        #     ax.bar(range(len(arr)), arr, color=colors)
-        #     ax.set_ylim(0.00, 1.00)
-        #     ax.set_title(f"Class {i} predictions")
-        #
-        # axes[-1].axis('off')
-        #
-        # plt.tight_layout()
-        # plt.show()
+                max_probs, preds = torch.max(probs, dim=1)
 
-        return prob_matrix
+                probs_all.append(probs.cpu())
+                max_probs_all.append(max_probs.cpu())
+                entropy_all.append(total_entropy.cpu())
+                preds_all.append(preds.cpu())
+                labels_all.append(y.cpu())
+
+            probs_all = torch.cat(probs_all)
+            max_probs_all = torch.cat(max_probs_all)
+            entropy_all = torch.cat(entropy_all)
+            preds_all = torch.cat(preds_all)
+            labels_all = torch.cat(labels_all)
+
+
+        if not is_ood:
+            # preds_all = torch.cat(preds_all)
+            # labels_all = torch.cat(labels_all)
+
+            correct_mask = preds_all == labels_all
+            incorrect_mask = ~correct_mask
+
+            avg_max_correct = max_probs_all[correct_mask].mean().item()
+            avg_max_incorrect = max_probs_all[incorrect_mask].mean().item()
+
+            test_acc = correct_mask.float().mean().item()
+
+            # NLL from predictive mean
+            true_probs = probs_all[torch.arange(len(labels_all)), labels_all]
+            avg_nll = -torch.log(true_probs + 1e-10).mean().item()
+
+            # test_loss /= len(dataloader)
+            # test_acc /= len(dataloader)
+            # avg_nll = total_nll / len(dataloader)
+            ece = compute_ece(probs_all.numpy(), preds_all.numpy(), labels_all.numpy())
+
+            print("=== ID Evaluation ===")
+            print(f"Test Loss: {test_loss:.4f}")
+            print(f"Test Accuracy: {test_acc:.4f}")
+            print(f"Average NLL: {avg_nll:.4f}")
+            print(f"ECE: {ece:.4f}")
+            # print(f"Avg entropy (ID): {entropy_all.mean().item():.4f}")
+            print(f"Avg max prob (correct):   {avg_max_correct:.4f}")
+            print(f"Avg max prob (incorrect): {avg_max_incorrect:.4f}")
+
+            return preds_all,entropy_all,max_probs_all,labels_all
+
+
+        else:
+            print("=== OOD Evaluation ===")
+            print(f"Avg entropy (OOD): {entropy_all.mean().item():.4f}")
+            print(f"Avg max softmax prob (OOD): {max_probs_all.mean().item():.4f}")
+
+            return preds_all,entropy_all,max_probs_all
+
+
 
     def get_dist(self, x, y):
         self.eval()
@@ -173,84 +207,4 @@ class BLLModel(nn.Module):
         plt.ylabel('Value')
         plt.title('Bar Plot with One Highlighted Bin')
         plt.show()
-
-    def compute_ece(self,probs, labels, n_bins=15):
-        """
-        Compute Expected Calibration Error (ECE).
-
-        Parameters
-        ----------
-        probs : array-like, shape (N,) or (N, C)
-            Predicted probabilities. For multiclass, pass softmax probabilities.
-        labels : array-like, shape (N,)
-            True labels (class indices for multiclass, or 0/1 for binary).
-        n_bins : int
-            Number of bins for calibration calculation.
-
-        Returns
-        -------
-        float
-            Expected Calibration Error (ECE)
-        """
-
-        probs = np.array(probs)
-        labels = np.array(labels)
-
-        # If multiclass: use the predicted class probability for each sample
-        if probs.ndim == 2:
-            # Select probability assigned to the true class
-            probs = probs[np.arange(len(probs)), labels]
-
-        # Create bins
-        bins = np.linspace(0, 1, n_bins + 1)
-        bin_indices = np.digitize(probs, bins) - 1
-
-        ece = 0.0
-        N = len(probs)
-
-        for b in range(n_bins):
-            mask = bin_indices == b
-            if np.any(mask):
-                bin_probs = probs[mask]
-                bin_labels = labels[mask]
-
-                # Confidence is mean predicted probability
-                conf = np.mean(bin_probs)
-
-                # Accuracy is fraction of correct labels
-                acc = np.mean(bin_labels == (bin_probs >= 0.5)) if probs.ndim == 1 else np.mean(
-                    bin_labels == labels[mask])
-
-                # Weighted difference
-                ece += (len(bin_probs) / N) * abs(acc - conf)
-
-        return ece
-
-
-    def test_ood(self, ood_loader):
-        self.eval()
-        batch_size = ood_loader.batch_size
-        pred = []
-        labels = []
-        entropy = []
-        with torch.no_grad():
-            for x, y in ood_loader:
-                x = x.float().to(self.device)
-                y = y.long().to(self.device)
-
-                out = self(x)
-                labels.extend(y.cpu())
-                batch_preds = out.predictive.probs.cpu().numpy()
-                predictive_entropy = -np.sum(batch_preds * np.log(batch_preds + 1e-10), axis=1)
-                # avg_entropy = predictive_entropy.mean()
-                pred.extend(batch_preds)
-                entropy.extend(predictive_entropy)
-
-
-
-        print(f"Avg entropy for ood:{np.mean(entropy):.4f}")
-
-
-
-
 

@@ -11,6 +11,7 @@ from deepensemble.ensemble import DeepEnsemble
 from deepensemblepipeline import ensemble_experiment
 from duq.duq import DUQ
 from duq_pipeline import duq_experiment
+from random_ood_data import RandomOODData
 from realnetwork.amc_cnn import AMC_CNN
 
 if __name__ == "__main__":
@@ -24,6 +25,7 @@ if __name__ == "__main__":
     num_classes = len(mods)
 
     print("Classes:", mods)
+    print(snrs)
 
     # ---------------------------------------------------
     # 2. BUILD FULL DATASET (X, labels)
@@ -74,6 +76,7 @@ if __name__ == "__main__":
     X_valid_tensor = torch.from_numpy(X_valid).float()
     X_test_tensor = torch.from_numpy(X_test).float()
 
+
     Y_train_tensor = torch.from_numpy(Y_train).long()
     Y_valid_tensor = torch.from_numpy(Y_valid).long()
     Y_test_tensor = torch.from_numpy(Y_test).long()
@@ -82,14 +85,17 @@ if __name__ == "__main__":
     valid_dataset = TensorDataset(X_valid_tensor, Y_valid_tensor)
     test_dataset = TensorDataset(X_test_tensor, Y_test_tensor)
 
+    ood_dataset = RandomOODData(2200, 128,1.9,'cuda')
+
     train_loader = DataLoader(train_dataset, batch_size=110, shuffle=True)
     valid_loader = DataLoader(valid_dataset, batch_size=110, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=110, shuffle=True)
+    ood_dataloader = DataLoader(ood_dataset, batch_size=110, shuffle=True)
 
-    # bll_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(mods), 10, 0.0001)
+    # bll_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(mods), 10, 0.0001, ood=True, ood_dataloader=ood_dataloader)
 
 
-    duq_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(mods), 10, 0.0001)
+    duq_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(mods), 10, 0.0001, ood=True, ood_loader=ood_dataloader)
 
 
     #ensemble_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, output_dim=num_classes,num_models=1, epochs=10)

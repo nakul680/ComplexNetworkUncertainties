@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from complexPytorch import CrossEntropyComplex, CrossEntropyComplexTwice
 from deepensemble.ensemble import DeepEnsemble
 from deepensemble.uncertainty import compute_and_plot_auroc
+from heatmap import calibration_curve
 
 
 def ensemble_experiment(real_network, complex_network,train_loader, val_loader, test_loader,output_dim,
@@ -90,5 +91,28 @@ def ensemble_experiment(real_network, complex_network,train_loader, val_loader, 
 
         print(f"Real Ensemble MI AUROC: {real_auroc:.4f}")
         print(f"Complex Ensemble MI AUROC: {complex_auroc:.4f}")
+
+    c_conf, c_acc, c_count = calibration_curve(
+        complex_metrics['max_probs'].numpy(),
+        complex_metrics['predictions'].numpy(),
+        complex_metrics['labels'].numpy()
+    )
+
+    # Real model calibration
+    r_conf, r_acc, r_count = calibration_curve(
+        real_metrics['max_probs'].numpy(),
+        real_metrics['predictions'].numpy(),
+        real_metrics['labels'].numpy()
+    )
+
+    plt.plot([0, 1], [0, 1], '--', color='gray')
+    plt.plot(c_conf, c_acc, marker='o', label='Complex')
+    plt.plot(r_conf, r_acc, marker='o', label='Real')
+    plt.legend()
+    plt.xlabel('Confidence')
+    plt.ylabel('Accuracy')
+    plt.title('Calibration Comparison')
+    plt.grid(True)
+    plt.show()
 
 

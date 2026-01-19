@@ -32,6 +32,14 @@ def apply_complex(fr, fi, input, dtype=torch.complex64):
 
 
 # Activation Functions, Pooling, Dropout
+class ComplexCardioid(Module):
+    @staticmethod
+    def forward(inp):
+        mag = torch.abs(inp)
+        cos_theta = inp.real / (mag + 1e-4)
+        gate = 0.5 * (1.0 + cos_theta)
+        return gate * inp
+
 
 class ComplexReLU(Module):  # best of the tested relus (CReLU, zReLU, modReLU)
     @staticmethod

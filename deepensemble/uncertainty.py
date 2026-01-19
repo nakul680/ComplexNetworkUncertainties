@@ -6,6 +6,9 @@ import torch
 import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score, roc_curve
 
+from complexPytorch import softmax_real_with_avg
+from heatmap import compute_ece
+
 
 def calculate_classification_uncertainty(ensemble_predictions, true_labels, batch_size=32, ood_label=100):
     """
@@ -32,7 +35,7 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
     num_classes = ensemble_predictions.shape[2]
     sample_size = ensemble_predictions.shape[1]
 
-    ensemble_logits = torch.tensor(ensemble_predictions).float()
+    ensemble_logits = torch.tensor(ensemble_predictions)
     true_labels = torch.tensor(true_labels).long()
 
     M, N, C = ensemble_logits.shape
@@ -40,8 +43,12 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
     # --------------------------------------------------
     # 0. Convert logits -> probs
     # --------------------------------------------------
-    log_probs = F.log_softmax(ensemble_logits, dim=-1)  # (M, N, C)
-    probs = log_probs.exp()  # (M, N, C)
+    if ensemble_logits.dtype == torch.complex64:
+        probs = softmax_real_with_avg(ensemble_logits, dim = -1)
+        log_probs = torch.log(probs + epsilon)
+    else:
+        log_probs = F.log_softmax(ensemble_logits, dim=-1)  # (M, N, C)
+        probs = log_probs.exp()  # (M, N, C)
 
     # --------------------------------------------------
     # 1. Predictive distribution (average across ensemble)
@@ -65,8 +72,10 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
 
     if id_mask.any():
         accuracy = (predicted_classes[id_mask] == true_labels[id_mask]).float().mean().item()
+        ece = compute_ece(mean_probs[id_mask], predicted_classes[id_mask], true_labels[id_mask])
     else:
         accuracy = float('nan')
+        ece = float('nan')
 
     # --------------------------------------------------
     # 4. NLL (only for in-distribution samples)
@@ -77,6 +86,7 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
         id_indices = torch.where(id_mask)[0]
         true_class_probs = mean_probs[id_indices, true_labels[id_indices]]
         nll_per_sample[id_indices] = -torch.log(true_class_probs + epsilon)
+
 
     avg_nll = nll_per_sample[id_mask].mean().item() if id_mask.any() else float('nan')
 
@@ -134,6 +144,7 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
     # --------------------------------------------------
     max_probs = mean_probs.max(dim=1)[0]
     avg_max_prob = max_probs.mean().item()
+    max_probs_id = max_probs[id_mask]
     avg_max_prob_id = max_probs[id_mask].mean().item() if id_mask.any() else float('nan')
     avg_max_prob_ood = max_probs[ood_mask].mean().item() if ood_mask.any() else float('nan')
 
@@ -184,6 +195,8 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
             nll_batches.append(float('nan'))
             brier_batches.append(float('nan'))
 
+
+
     return {
         # Overall metrics (ID samples only for supervised metrics)
         "accuracy": accuracy,
@@ -196,6 +209,10 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
         "mutual_information": avg_mutual_information,
         "avg_prediction_variance": avg_prediction_variance,
         "avg_max_prob": avg_max_prob,
+        "ece": ece,
+        "max_probs": max_probs,
+        "predictions": predicted_classes,
+        "labels": true_labels,
 
         # ID vs OOD breakdown
         "num_id_samples": id_mask.sum().item(),
