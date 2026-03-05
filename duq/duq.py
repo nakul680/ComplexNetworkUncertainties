@@ -3,6 +3,8 @@ from matplotlib import pyplot as plt
 from torch import nn
 import torch.nn.functional as F
 
+from realnetwork.amc_cnn import AMC_MLP
+
 
 class DUQ(nn.Module):
     """
@@ -27,7 +29,7 @@ class DUQ(nn.Module):
             embedding_size,
             learnable_length_scale=False,
             length_scale=0.1,
-            gamma=0.999,
+            gamma=0.99,
     ):
         super().__init__()
 
@@ -218,7 +220,7 @@ class DUQ(nn.Module):
 
         return max_distance
 
-    def train_duq(self, epochs, train_loader, val_loader, optimizer, device, lgp):
+    def train_duq(self, epochs, train_loader, val_loader, optimizer, device, lgp=0.0):
         # self.initialize_centroids(train_loader, device)
         self.train()
 

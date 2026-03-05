@@ -7,10 +7,11 @@ import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score, roc_curve
 
 from complexPytorch import softmax_real_with_avg
+from complexPytorch.complexLoss import NegativeLogLossComplex
 from heatmap import compute_ece
 
 
-def calculate_classification_uncertainty(ensemble_predictions, true_labels, batch_size=32, ood_label=100):
+def calculate_classification_uncertainty(ensemble_predictions, true_labels, batch_size=100, ood_label=100):
     """
     Calculate uncertainty metrics for classification, with batching and batch-wise value plots.
     Supports OOD (out-of-distribution) samples.
@@ -176,6 +177,7 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
         else float("nan")
     )
 
+
     # --------------------------------------------------
     # 12. Batch-wise metrics (only for ID samples)
     # --------------------------------------------------
@@ -204,6 +206,7 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
         "brier_score": brier_score,
 
         # Uncertainty metrics (all samples)
+        "all_entropy": predictive_entropy,
         "predictive_entropy": avg_predictive_entropy,
         "expected_entropy": avg_expected_entropy,
         "mutual_information": avg_mutual_information,
@@ -228,6 +231,7 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
         "mutual_information_id": avg_mutual_information_id,
         "mutual_information_ood": avg_mutual_information_ood,
 
+        "prediction_variance": prediction_variance,
         "prediction_variance_id": avg_prediction_variance_id,
         "prediction_variance_ood": avg_prediction_variance_ood,
 
@@ -237,6 +241,8 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
         # Correct vs incorrect (ID only)
         "avg_correct_entropy": avg_entropy_correct,
         "avg_wrong_entropy": avg_entropy_incorrect,
+        "correct_max_probs": max_probs[correct_mask],
+        "wrong_max_probs": max_probs[incorrect_mask],
         "avg_correct_max_prob": avg_max_prob_correct,
         "avg_wrong_max_prob": avg_max_prob_incorrect,
 
@@ -262,3 +268,38 @@ def compute_and_plot_auroc(id_scores, ood_scores, label, ax=None):
         ax.plot(fpr, tpr, label=f"{label} (AUROC={auroc:.3f})")
 
     return auroc
+
+
+def calculate_regression_uncertainty(ensemble_mean, ensemble_var_real, ensemble_var_imag, true_results):
+
+    # Get predictions
+    e_var_real = torch.tensor(ensemble_var_real).mean(dim=0)
+    e_var_imag = torch.tensor(ensemble_var_imag).mean(dim=0)
+
+    mean_real = torch.tensor(ensemble_mean.real)
+    mean_imag = torch.tensor(ensemble_mean.imag)
+
+    var_e_real = ((mean_real - mean_real.mean(dim=0)) ** 2).mean(dim=0)
+    var_e_imag = ((mean_imag - mean_imag.mean(dim=0)) ** 2).mean(dim=0)
+
+    mixture_var_real = e_var_real + var_e_real
+    mixture_var_imag = e_var_imag + var_e_imag
+
+    mixture_mean = torch.tensor(ensemble_mean).mean(dim=0)
+
+
+
+    # RMSE
+    rmse = torch.sqrt((torch.abs(mixture_mean - true_results) ** 2).mean())
+    print(f"RMSE={rmse:.3f}")
+
+    # NLL
+    loss_func = NegativeLogLossComplex()
+    nll = loss_func(mixture_mean, (mixture_var_real, mixture_var_imag), true_results)
+    print(f"NLL={nll:.3f}")
+
+
+    return {
+        "rmse": rmse,
+        "nll": nll,
+    }

@@ -2,14 +2,18 @@ import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from sklearn.metrics import roc_curve, roc_auc_score
+from sklearn.model_selection import train_test_split
 
+from deepensemble.temp_scaling import TemperatureScaling
 from duq.duq import DUQ
-from heatmap import fpr_at_95_tpr, calibration_curve, compute_ece
+from heatmap import fpr_at_95_tpr, calibration_curve, compute_ece, accuracy_rejection_curve
 from plot_feature_map import plot_umap, run_umap
 
 
 def duq_experiment(real_network, complex_network, train_loader, valid_loader, test_loader, output_dim=11, epochs=10,
                    lr=0.0005, feature_dim=128, embed_size=256, length_scale=0.5, ood=False, ood_loader=None):
+    complex_temp_scaler = TemperatureScaling()
+    real_temp_scaler = TemperatureScaling()
     real_duq = DUQ(
         real_network(output_dim), feature_dim,
         output_dim, embed_size,
@@ -17,7 +21,7 @@ def duq_experiment(real_network, complex_network, train_loader, valid_loader, te
         0.999
     )
     real_duq.to('cuda')
-    real_duq.train_duq(epochs, train_loader, valid_loader, torch.optim.Adam(real_duq.parameters(), lr=lr), 'cuda', 0.00)
+    real_duq.train_duq(epochs, train_loader, valid_loader, torch.optim.Adam(real_duq.parameters(), lr=lr), 'cuda', 0.01)
 
 
     complex_duq = DUQ(
@@ -28,11 +32,78 @@ def duq_experiment(real_network, complex_network, train_loader, valid_loader, te
     )
     complex_duq.to('cuda')
     complex_duq.train_duq(epochs, train_loader, valid_loader, torch.optim.Adam(complex_duq.parameters(), lr=lr), 'cuda',
-                          0.00)
+                          0.01)
+    # features = []
+    # labels = []
+    # with torch.no_grad():
+    #     for x,y in train_loader:
+    #         x = x.float().to('cuda')
+    #         y = y.long()
+    #
+    #         features.append(real_duq.backbone.compute_features(x))
+    #         labels.append(y)
+    #
+    # features = torch.cat(features, dim=0)  # or np.concatenate if numpy
+    # labels = torch.cat(labels, dim=0)  # or np.concatenate if numpy
+    #
+    # # Stratified sampling
+    # indices = np.arange(len(labels))
+    # _, sampled_indices = train_test_split(
+    #     indices,
+    #     test_size=0.05,  # Keep 10% of data
+    #     stratify=labels.numpy(),
+    #     random_state=42
+    # )
+    #
+    # # Use sampled data
+    # features = features[sampled_indices]
+    # labels = labels[sampled_indices]
+    #
+    # # Convert to numpy if they're tensors
+    # if torch.is_tensor(features):
+    #     features = features.detach().cpu().numpy()
+    # if torch.is_tensor(labels):
+    #     labels = labels.detach().cpu().numpy()
+    #
+    # embeddings = run_umap(features)
+    # embeddings = np.concatenate(embeddings, axis=0)
+    #
+    # if isinstance(embeddings, list):
+    #     embeddings = np.array(embeddings)
+    #
+    # plt.figure(figsize=(8, 6))
+    #
+    # # Plot each class with different colors
+    # classes = np.unique(labels)
+    # colors = ['blue', 'red', 'green', 'orange', 'purple','yellow','black','brown','pink','cyan', 'magenta']
+    #
+    # for i, cls in enumerate(classes):
+    #     mask = labels == cls
+    #     plt.scatter(embeddings[mask, 0], embeddings[mask, 1],
+    #                 c=colors[i],
+    #                 label=f'Class {cls}',
+    #                 alpha=0.6,
+    #                 s=50,
+    #                 edgecolors='black',
+    #                 linewidths=0.5)
+    #
+    # plt.xlabel('Feature 1', fontsize=12)
+    # plt.ylabel('Feature 2', fontsize=12)
+    # plt.title('Data Scatter Plot by Class', fontsize=14, fontweight='bold')
+    # # plt.legend()
+    # plt.grid(alpha=0.3)
+    # plt.tight_layout()
+    # plt.show()
+    #
+    #
+    #
+
 
     print("Testing real network")
+    real_temp_scaler.fit(real_duq, valid_loader)
     real_id_likelihood, real_correct_likelihood, real_wrong_likelihood, real_preds, real_labels = real_duq.test_duq(test_loader, 'cuda')
     print("Testing complex network")
+    complex_temp_scaler.fit(complex_duq, valid_loader)
     complex_id_likelihood, complex_correct_likelihood, complex_wrong_likelihood, complex_preds, complex_labels = complex_duq.test_duq(test_loader, 'cuda')
 
     if ood:
@@ -108,50 +179,6 @@ def duq_experiment(real_network, complex_network, train_loader, valid_loader, te
     plt.grid(True)
     plt.show()
 
-        # # --- Extract features ---
-        # real_id_feats, real_id_labels = extract_duq_features(real_duq, test_loader, 'cuda')
-        # real_ood_feats, _ = extract_duq_features(real_duq, ood_loader, 'cuda')
-        #
-        # real_centroids = compute_feature_centroids(
-        #                     real_id_feats,
-        #                     real_id_labels,
-        #                     output_dim
-        #                 )
-        #
-        # # --- UMAP ---
-        # real_id_umap, real_ood_umap, real_centroid_umap = run_umap(
-        #     [real_id_feats, real_ood_feats, real_centroids]
-        # )
-        #
-        # plot_umap(
-        #     real_id_umap,
-        #     real_id_labels,
-        #     real_ood_umap,
-        #     real_centroid_umap,
-        #     title="Real DUQ Feature Space with Centroids (UMAP)"
-        # )
-        #
-        # complex_id_feats, complex_id_labels = extract_duq_features(complex_duq, test_loader, 'cuda')
-        # complex_ood_feats, _ = extract_duq_features(complex_duq, ood_loader, 'cuda')
-        #
-        # complex_centroids = compute_feature_centroids(
-        #                     complex_id_feats,
-        #                     complex_id_labels,
-        #                     output_dim
-        #                 )
-        #
-        # complex_id_umap, complex_ood_umap, complex_centroid_umap = run_umap(
-        #     [complex_id_feats, complex_ood_feats, complex_centroids]
-        # )
-        #
-        # plot_umap(
-        #     complex_id_umap,
-        #     complex_id_labels,
-        #     complex_ood_umap,
-        #     complex_centroid_umap,
-        #     title="Complex DUQ Feature Space with Centroids (UMAP)"
-        # )
-
     categories = ['Uncertainty on Correct Predictions', 'Uncertainty on Wrong Predictions']
     set1_avgs = [1 - (sum(real_correct_likelihood) / len(real_correct_likelihood)), 1 - (sum(real_wrong_likelihood) / len(real_wrong_likelihood))]
     set2_avgs = [1 - (sum(complex_correct_likelihood) / len(complex_correct_likelihood)), 1 - (sum(complex_wrong_likelihood) / len(complex_wrong_likelihood))]
@@ -178,6 +205,29 @@ def duq_experiment(real_network, complex_network, train_loader, valid_loader, te
     plt.legend()
     plt.show()
 
+    fig, ax = plt.subplots(1,2,figsize=(10, 6))
+
+    ax[0].hist(real_correct_likelihood, bins='auto', alpha=0.5, label='Real Network correct predictions')
+    ax[0].hist(real_wrong_likelihood, bins='auto', alpha=0.5, label='Real Network wrong predictions')
+
+    ax[1].hist(complex_correct_likelihood, bins='auto', alpha=0.5, label='Complex Network correct predictions')
+    ax[1].hist(complex_wrong_likelihood, bins='auto', alpha=0.5, label='Complex Network wrong predictions')
+
+    ax[0].legend()
+    ax[1].legend()
+    plt.show()
+
+    real_accuracy, real_rejection = accuracy_rejection_curve(real_labels.detach().numpy(), real_preds.detach().numpy(), real_id_likelihood)
+    complex_accuracy, complex_rejection = accuracy_rejection_curve(complex_labels.detach().numpy(), complex_preds.detach().numpy(), complex_id_likelihood)
+
+    plt.plot(real_rejection, real_accuracy, label=" Real Accuracy-Rejection Curve")
+    plt.plot(complex_rejection, complex_accuracy, label=" Complex Accuracy-Rejection Curve")
+    plt.xlabel("Rejection Rate")
+    plt.ylabel("Accuracy")
+    plt.title("Accuracy-Rejection Curve")
+    plt.grid(True)
+    plt.legend()
+    plt.show()
 
 
 

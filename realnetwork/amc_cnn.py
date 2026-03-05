@@ -30,11 +30,11 @@ class AMC_CNN(nn.Module):
 
         # Fully connected layers
         self.flatten = nn.Flatten()
-        self.fc1 = nn.Linear(256 * 16, 256)
+        self.fc1 = nn.Linear(256 * 16, 284)
         self.dropout1 = nn.Dropout(0.4)
-        self.fc2 = nn.Linear(256, 128)
-        # self.dropout2 = nn.Dropout(0.2)
-        # self.fc3 = nn.Linear(128, num_classes)
+        self.fc2 = nn.Linear(284, 128)
+        self.dropout2 = nn.Dropout(0.2)
+        self.fc3 = nn.Linear(128, num_classes)
 
     def forward(self, x):
         # x: [batch, 2, 128]
@@ -86,11 +86,12 @@ class AMC_MLP(nn.Module):
     Input: [batch_size, 2, 128] (2 channels: I/Q, 128 time steps)
     Output: [batch_size, 11] (11 modulation classes)
     """
+    is_complex = False
 
-    def __init__(self, num_classes=11, hidden_sizes=[512, 256, 128], dropout=0.5):
+    def __init__(self, num_classes=11, hidden_sizes=[256, 128], dropout=0.5):
         super(AMC_MLP, self).__init__()
 
-        input_size = 2 * 128  # flatten 2 channels x 128 length
+        input_size = 2 # flatten 2 channels x 128 length
         self.flatten = nn.Flatten()
 
         layers = []
@@ -100,7 +101,9 @@ class AMC_MLP(nn.Module):
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(dropout))
             in_features = h
-        layers.append(nn.Linear(in_features, num_classes))  # output layer
+        # layers.append(nn.Linear(in_features, num_classes))
+        self.output_layer = nn.Linear(in_features, num_classes)  # output layer
+
 
         self.mlp = nn.Sequential(*layers)
 
@@ -108,5 +111,12 @@ class AMC_MLP(nn.Module):
         # x: [batch, 2, 128]
         x = self.flatten(x)  # [batch, 256]
         x = self.mlp(x)
+        x = self.output_layer(x)
         # x = torch.softmax(x, dim=1)
+        return x
+
+
+    def compute_features(self, x):
+        x = self.flatten(x)  # [batch, 256]
+        x = self.mlp(x)
         return x

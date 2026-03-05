@@ -5,9 +5,10 @@ import pickle
 
 from bll_pipeline import bll_experiment
 from complexnetwork.CDSCNN import TrueCDSCNN
-from complexnetwork.complexCNN import ComplexCNN
+from complexnetwork.complexCNN import ComplexCNN_RLL
 from deepensemblepipeline import ensemble_experiment
 from duq_pipeline import duq_experiment
+from heatmap import count_params
 from random_ood_data import RandomOODData
 from realnetwork.amc_cnn import AMC_CNN
 
@@ -19,6 +20,7 @@ if __name__ == "__main__":
         p = u.load()
 
     snrs = sorted(list(set([key[1] for key in p.keys()])))
+    # snrs = snrs[4:6]
     mods = sorted(list(set([key[0] for key in p.keys()])))
     num_classes = len(mods)
 
@@ -27,8 +29,8 @@ if __name__ == "__main__":
     # ---------------------------------------------------
     # 1. SELECT ONE RANDOM CLASS AS OOD
     # ---------------------------------------------------
-    # np.random.seed(2016293)
-    np.random.seed(20011008)
+    np.random.seed(2016293)
+    #np.random.seed(20011008)
     # ood_class_idx = np.random.choice(len(mods), size=5, replace=False)
     ood_class_idx = [4,5,8,2,3]
     ood_class = [mods[i] for i in ood_class_idx]
@@ -140,12 +142,20 @@ if __name__ == "__main__":
     print(f"Valid classes: {np.unique(Y_valid)} (count: {len(np.unique(Y_valid))})")
     print(f"Test classes: {np.unique(Y_test)} (count: {len(np.unique(Y_test))})")
     print(f"OOD classes: {np.unique(Y_ood)} (count: {len(np.unique(Y_ood))})")
+
+    complex_model = ComplexCNN_RLL(num_classes)
+    real_model = AMC_CNN(num_classes)
+    print(torch.__version__)
+    print(f"complex network:{count_params(complex_model)}")
+    print(f"real network:{count_params(real_model)}")
     #
     # test_dataset = ConcatDataset([test_dataset, ood_dataset])
     # test_loader = DataLoader(test_dataset, batch_size=110, shuffle=False)
 
     # bll_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods), 10, 0.0001, ood = True, ood_dataloader=ood_loader)
-    duq_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods), 10, 0.0001, ood=True,
-                   ood_loader=ood_loader)
-    # ensemble_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods),
-    #                    5, epochs=10, ood=True, ood_loader=ood_loader)
+    # duq_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods), 10, 0.0001, ood=True,
+    #                  ood_loader=ood_loader)
+    ensemble_experiment(AMC_CNN, ComplexCNN_RLL, train_loader, valid_loader, test_loader, len(id_mods),
+                     2, epochs=10, ood=True, ood_loader=ood_loader)
+
+

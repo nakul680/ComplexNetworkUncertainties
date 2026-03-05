@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
+from heatmap import plot_calibration
+
 
 def compare_histograms():
     """
@@ -39,5 +41,30 @@ def compare_histograms():
     plt.show()
 
 
+def plot_calibrations(confs, accs, names, bin_edges):
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+    widths = np.diff(bin_edges)
+    bin_centers = [5,15,25,35,45,55,65,75,85,95]
+
+    for ax, acc, name in zip(axes, accs, names):
+        ax.bar(bin_centers, height=acc, width=widths, edgecolor='black', color='steelblue', alpha=0.3, label='Bins')
+        ax.plot(confs, acc, marker='o')
+        ax.plot([0, 100], [0, 100], '--', color='red', label='Perfect calibration')
+        ax.set_xlim(0,100)
+        ax.set_ylim(0, 100)
+        ax.set_xlabel('Predictive confidence')
+        ax.set_ylabel('Empirical accuracy')
+        ax.set_title(f'{name}')
+        ax.legend()
+        ax.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+
 if __name__ == '__main__':
-    compare_histograms()
+    # compare_histograms()
+    plot_calibrations([5,15,25,35,45,55,65,75,85,95],[[5,15,25,35,45,55,65,75,85,95],[0,5,15,25,35,45,55,65,75,85],[15,25,35,45,55,65,75,85,95,100]],
+                      names =['Perfectly calibrated', 'Overconfident', 'Underconfident'],
+                      bin_edges=[0,10,20,30,40,50,60,70,80,90,100])

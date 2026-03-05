@@ -20,3 +20,15 @@ class CrossEntropyComplexTwice(nn.Module):
     def forward(self, x, y):
         return 0.5 * (nn.functional.cross_entropy(x.real, y.long()) + nn.functional.cross_entropy(x.imag, y.long()))
 
+
+class NegativeLogLossComplex(nn.Module):
+    def forward(self, mean, variance, y):
+        var_real, var_imag = variance
+
+        err_real = mean.real - y.real
+        err_imag = mean.imag - y.imag
+
+        nll_real = 0.5 * (err_real ** 2 / var_real + torch.log(var_real) + 1e-6)
+        nll_imag = 0.5 * (err_imag ** 2 / var_imag + torch.log(var_imag) + 1e-6)
+
+        return (nll_real + nll_imag).mean()

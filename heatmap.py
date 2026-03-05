@@ -107,13 +107,20 @@ def calibration_curve(confidences, predictions, labels, n_bins=10):
 
 
 def plot_calibration(conf, acc, name):
-    plt.plot([0, 1], [0, 1], '--', color='gray', label='Perfect calibration')
-    plt.plot(conf, acc, marker='o', label=name)
-    plt.xlabel('Predicted confidence')
-    plt.ylabel('Empirical accuracy')
-    plt.title(f'Calibration Plot: {name}')
-    plt.legend()
-    plt.grid(True)
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    width = conf[1] - conf[0] if len(conf) > 1 else 0.1
+    ax.bar(conf, height=acc, width=width, edgecolor='black', color='steelblue', alpha=0.3, label='Bins')
+
+    ax.plot([0, 1], [0, 1], '--', color='gray', label='Perfect calibration')
+    ax.plot(conf, acc, marker='o', label=name)
+    ax.set_xlabel('Predicted confidence')
+    ax.set_ylabel('Empirical accuracy')
+    ax.set_title(f'Calibration Plot: {name}')
+    ax.legend()
+    ax.grid(True)
+
+    plt.tight_layout()
     plt.show()
 
 
@@ -147,9 +154,52 @@ def compute_ece(probs, preds, labels, n_bins=15):
 def count_params(model):
     real_equiv_params = 0
     for p in model.parameters():
+        param = p.numel()
         if p.is_complex():
-            real_equiv_params += 2 * p.numel()
+            real_equiv_params += 2 * param
         else:
-            real_equiv_params += p.numel()
+            real_equiv_params += param
 
     return real_equiv_params
+
+
+
+def accuracy_rejection_curve(y_true, y_pred, y_prob):
+    """
+    y_true : true labels
+    y_pred : predicted labels
+    y_prob : predicted probabilities for the predicted class
+    """
+    # confidence score = probability of predicted class
+    conf = np.array(y_prob)
+
+    # sort by confidence (descending)
+    idx = np.argsort(conf)[::-1]
+    y_true_sorted = y_true[idx]
+    y_pred_sorted = y_pred[idx]
+    conf_sorted = conf[idx]
+
+    # compute accuracy at each rejection rate
+    acc = []
+    rejection = np.linspace(0, 1, len(conf_sorted))
+    for r in rejection:
+        k = int(len(conf_sorted) * (1 - r))  # keep top (1-r)
+        acc.append(np.mean(y_true_sorted[:k] == y_pred_sorted[:k]))
+
+    return rejection, np.array(acc)
+
+# # Example data
+# np.random.seed(0)
+# y_true = np.random.randint(0, 3, 100)
+# y_pred = np.random.randint(0, 3, 100)
+# y_prob = np.random.rand(100)
+#
+# rejection, acc = accuracy_rejection_curve(y_true, y_pred, y_prob)
+#
+# plt.plot(rejection, acc, label="Accuracy-Rejection Curve")
+# plt.xlabel("Rejection Rate")
+# plt.ylabel("Accuracy")
+# plt.title("Accuracy-Rejection Curve")
+# plt.grid(True)
+# plt.legend()
+# plt.show()

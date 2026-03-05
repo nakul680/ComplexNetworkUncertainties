@@ -6,7 +6,9 @@ import torch.nn.functional as F
 
 from complexPytorch import CrossEntropyComplex, softmax_real_with_abs, softmax_real_with_avg, CrossEntropyComplexTwice, \
     softmax_complex
-from deepensemble.uncertainty import calculate_classification_uncertainty
+from deepensemble.uncertainty import calculate_classification_uncertainty, calculate_regression_uncertainty
+
+
 # from CDSCNN.train import train_one_epoch
 # from CDSCNN.validation import val
 
@@ -14,10 +16,14 @@ from deepensemble.uncertainty import calculate_classification_uncertainty
 
 
 class DeepEnsemble:
-    def __init__(self, model, num, model_kwargs, device='cuda'):
+    def __init__(self, model, num, model_kwargs, task = "classification",device='cuda'):
         self.device = device
         self.num = num
         self.models = []
+        self.task = task.lower()
+
+        if task not in ["classification", "regression"]:
+            raise ValueError(f"task {task} is not supported.")
 
         for i in range(num):
             torch.manual_seed(i*100)
@@ -25,55 +31,49 @@ class DeepEnsemble:
             self.models.append(m)
 
 
-    def val(self, net, device, val_dataloader, loss_func, val_LOSS, val_AC):
+        self.backbone = self.models[0]
 
+    def val(self, net, device, val_dataloader, loss_func, val_loss_history, val_metric_history):
         net.eval()
         total_loss = 0.0
-        correct = 0
-        total = 0
+        total_metric = 0.0
 
         with torch.no_grad():
             for val_x, val_y in val_dataloader:
-                val_x = val_x.float().to(device)
-                val_y = val_y.long().to(device)
+                val_x = val_x.to(device)
+                val_y = val_y.to(device)
 
-                outputs = net(val_x)
-                loss = loss_func(outputs, val_y)
+                if self.task == 'classification':
+                    out = net(val_x)
+                    loss = loss_func(out, val_y)
+                    total_metric += (out.argmax(dim=1) == val_y).float().mean().item()
+                else:
+                    mean, var = net(val_x)
+                    loss = loss_func(mean, var, val_y)
+                    # .abs() required for complex-valued outputs (squared modulus)
+                    total_metric += torch.sqrt((torch.abs(mean - val_y) ** 2).mean()).item()
 
-                total_loss += loss.item() * val_x.size(0)
+                total_loss += loss.item()
 
-                # if self.models[0].is_complex:
-                #     outputs = softmax_real_with_avg(outputs, dim=1)
-                # else:
-                #     outputs = torch.softmax(outputs, dim=1)
+        num_batches = len(val_dataloader)
+        val_loss_history.append(total_loss / num_batches)
+        val_metric_history.append(total_metric / num_batches)
 
-                preds = outputs.argmax(dim=1)
-                correct += (preds == val_y).sum().item()
-                total += val_y.size(0)
+    def train_ensemble(self, train_dataloader, val_dataloader, epochs, lr=0.001, loss_func=torch.nn.CrossEntropyLoss()):
+        for i, net in enumerate(self.models):
+            train_loss_history = []
+            train_metric_history = []
+            val_loss_history = []
+            val_metric_history = []
 
-        avg_loss = total_loss / total
-        avg_acc = correct / total
+            print(f"Training model {i + 1} of {len(self.models)}")
 
-        val_LOSS.append(avg_loss)
-        val_AC.append(avg_acc)
+            optimizer = torch.optim.Adam(net.parameters(), lr=lr)
 
-    def train_ensemble(self, train_dataloader, val_dataloader, epochs, lr = 0.001, loss_func = torch.nn.CrossEntropyLoss()):
-        is_complex = self.models[0].is_complex
-        for i in range(len(self.models)):
-            net = self.models[i]
-            loss = []
-            acc = []
-            val_loss = []
-            val_acc = []
-            print(f"Training model {i+1} of {len(self.models)}")
-            # torch.manual_seed(i)
-            optimizer = torch.optim.Adam(self.models[i].parameters(), lr=lr)
-
-            # Create model-specific dataloaders with different shuffle seeds
+            # Bootstrap sample (with replacement) for ensemble diversity
             train_dataset = train_dataloader.dataset
             indices = torch.randint(0, len(train_dataset), (len(train_dataset),))
             bootstrapped_dataset = torch.utils.data.Subset(train_dataset, indices)
-
             model_train_loader = DataLoader(
                 bootstrapped_dataset,
                 batch_size=train_dataloader.batch_size,
@@ -81,73 +81,96 @@ class DeepEnsemble:
             )
 
             for epoch in range(epochs):
-                # torch.manual_seed(i*epoch)
                 net.train()
-                Loss = 0
-                ac = 0
-                for _,(x, y) in enumerate(model_train_loader):
-                    x = x.float().to(self.device)
-                    y = y.long().to(self.device)
+                total_loss = 0.0
+                total_metric = 0.0
+                num_batches = 0
+
+                for x, y in model_train_loader:
+                    x = x.to(self.device)
+                    y = y.to(self.device)
+
                     optimizer.zero_grad()
-                    out = net(x)
-                    l = loss_func(out, y)
-                    Loss += l.item()
-                    # if is_complex:
-                    #     l.abs().backward()
-                    # else:
+
+                    if self.task == 'classification':
+                        out = net(x)
+                        l = loss_func(out, y)
+                    else:
+                        mean, var = net(x)
+                        l = loss_func(mean, var, y)
+
                     l.backward()
                     optimizer.step()
-                    # if is_complex:
-                    #     out = softmax_real_with_avg(out, dim=1)
-                    # else:
-                    #     out = torch.softmax(out, dim=1)
 
-                    ac += accuracy_score(y.cpu().detach().numpy(), torch.max(out, 1)[1].cpu().detach().numpy())
+                    total_loss += l.item()
+                    num_batches += 1
 
-                # if is_complex:
-                #     Loss = abs(Loss)
+                    with torch.no_grad():
+                        if self.task == 'classification':
+                            total_metric += (out.argmax(dim=1) == y).float().mean().item()
+                        else:
+                            total_metric += torch.sqrt((torch.abs(mean - y) ** 2).mean()).item()
 
-                loss.append(Loss / len(model_train_loader))
-                acc.append(ac / len(model_train_loader))
-                self.val(self.models[i], self.device, val_dataloader, loss_func, val_loss, val_acc)
-                print(f"Epoch {epoch+1}/{epochs}")
-                print(f"Train Accuracy: {acc[epoch]}")
-                print(f"Train Loss: {loss[epoch]}")
-                print(f"Valid Accuracy: {val_acc[epoch]}")
-                print(f"Valid Loss: {val_loss[epoch]}")
+                avg_loss = total_loss / num_batches
+                avg_metric = total_metric / num_batches
+
+                train_loss_history.append(avg_loss)
+                train_metric_history.append(avg_metric)
+
+                self.val(net, self.device, val_dataloader, loss_func, val_loss_history, val_metric_history)
+
+                metric_label = "Accuracy" if self.task == 'classification' else "RMSE"
+                print(f"Epoch {epoch + 1}/{epochs} | "
+                      f"Train {metric_label}: {avg_metric:.4f} | Train Loss: {avg_loss:.4f} | "
+                      f"Val {metric_label}: {val_metric_history[-1]:.4f} | Val Loss: {val_loss_history[-1]:.4f}")
 
             torch.cuda.empty_cache()
 
 
-    def test_ensemble(self, test_dataloader,loss_func, ood = False):
+    def test_ensemble(self, test_dataloader, temp_scaler = None):
 
         for model in self.models:
             model.eval()
 
         num_models = len(self.models)
         all_ensemble_predictions = []  # Will store predictions for all batches
-        all_labels = []  # Will store all true labels
+        all_results = []  # Will store all true labels
+        all_mean = []
+        all_var_real = []
+        all_var_imag = []
         test_loss = 0.0
 
         with torch.no_grad():
             for x, y in test_dataloader:
-                x = x.float().to(self.device)
-                y = y.long().to(self.device)
+                x = x.to(self.device)
+                y = y.to(self.device)
 
                 # Collect predictions from all models for this batch
                 batch_predictions = []
+                batch_mean = []
+                batch_var_real = []
+                batch_var_imag = []
                 for model in self.models:
-                    # logits = model(x)
-                    # if model.is_complex:
-                    #     probs = softmax_real_with_avg(logits, dim=1)
-                    # else:
-                    #     probs = torch.softmax(logits, dim=1)  # Convert logits to probabilities
-                    logits = model(x)
+                    if self.task == 'classification':
+                        logits = model(x)
+                        if temp_scaler:
+                            logits = temp_scaler(logits)
+
+                        batch_predictions.append(logits.cpu())
+                    else:
+                        mean, var = model(x)
+                        batch_predictions.append(mean.cpu())
+                        batch_var_real.append(var[0].cpu())
+                        batch_var_imag.append(var[1].cpu())
+
                     # probs = torch.softmax(logits, dim=1)  # Convert logits to probabilities
-                    batch_predictions.append(logits.cpu())
+
 
                 # Stack: (num_models, batch_size, num_classes)
                 batch_predictions = torch.stack(batch_predictions, dim=0)
+                # batch_mean = torch.stack(batch_mean, dim=0)
+                batch_var_real = torch.stack(batch_var_real, dim=0)
+                batch_var_imag = torch.stack(batch_var_imag, dim=0)
 
                 # Calculate mean prediction for loss
                 mean_pred = batch_predictions.mean(dim=0).to(self.device)
@@ -160,68 +183,52 @@ class DeepEnsemble:
 
                 # Store for later uncertainty calculation
                 all_ensemble_predictions.append(batch_predictions)
-                all_labels.append(y.cpu())
+                all_results.append(y.cpu())
+                # all_mean.append(batch_mean)
+                all_var_real.append(batch_var_real)
+                all_var_imag.append(batch_var_imag)
 
         # Concatenate all batches
         # Shape: (num_models, total_samples, num_classes)
         ensemble_predictions = torch.cat(all_ensemble_predictions, dim=1).numpy()
-        true_labels = torch.cat(all_labels, dim=0).numpy()
+        # ensemble_mean = torch.cat(all_mean, dim=1).numpy()
+        ensemble_var_real = torch.cat(all_var_real, dim=1).numpy()
+        ensemble_var_imag = torch.cat(all_var_imag, dim=1).numpy()
+        true_results = torch.cat(all_results, dim=0).numpy()
 
         # Calculate comprehensive uncertainty metrics
+        if self.task == "classification":
+            metrics = calculate_classification_uncertainty(ensemble_predictions, true_results)
+            print(f"Expected ID entropy: {metrics['expected_entropy_id']}")
 
-        metrics = calculate_classification_uncertainty(ensemble_predictions, true_labels)
-        print(f"Expected ID entropy: {metrics['expected_entropy_id']}")
+            # Print summary
+            print(f"Test Accuracy: {metrics['accuracy']:.4f}")
+            # print(f"Test Loss: {metrics['test_loss']:.4f}")
+            print(f"Test NLL: {metrics['nll']:.4f}")
+            print(f"Brier Score: {metrics['brier_score']:.4f}")
+            print(f"Avg Predictive Entropy: {metrics['predictive_entropy']:.4f}")
+            print(f"Avg Mutual Information: {metrics['mutual_information']:.4f}")
+            print(f"Avg Prediction Variance: {metrics['avg_prediction_variance']:.4f}")
+            print(f"ECE: {metrics['ece']:.4f}")
 
-        # Add loss to metrics
-        # metrics['test_loss'] = test_loss / len(test_dataloader)
-
-        # Calculate additional uncertainty metrics
-        # epsilon = 1e-10
-        #
-        # # Mutual Information
-        # mean_predictions = ensemble_predictions.mean(axis=0)
-        # # pred_entropy = -np.sum(mean_predictions * np.log(mean_predictions + epsilon), axis=1)
-        # pred_entropy = -np.sum(mean_predictions * mean_predictions, axis=1)
-        # # individual_entropy = -np.sum(
-        # #     ensemble_predictions * np.log(ensemble_predictions + epsilon),
-        # #     axis=2
-        # # )
-        # individual_entropy = -np.sum(
-        #         ensemble_predictions * ensemble_predictions ,
-        #         axis=2
-        #     )
-        # exp_entropy = individual_entropy.mean(axis=0)
-        # mutual_info = pred_entropy - exp_entropy
-
-
-        # metrics['mutual_information'] = mutual_info.mean()
-        # metrics['mi_per_sample'] = mutual_info
-        # metrics['expected_entropy'] = exp_entropy.mean()
-        #
-        # # Prediction variance (epistemic uncertainty)
-        # prediction_variance = ensemble_predictions.var(axis=0)
-        # metrics['avg_prediction_variance'] = prediction_variance.mean()
-        # metrics['variance_per_sample'] = prediction_variance.mean(axis=1)
-
-        # Print summary
-        print(f"Test Accuracy: {metrics['accuracy']:.4f}")
-        # print(f"Test Loss: {metrics['test_loss']:.4f}")
-        print(f"Test NLL: {metrics['nll']:.4f}")
-        print(f"Brier Score: {metrics['brier_score']:.4f}")
-        print(f"Avg Predictive Entropy: {metrics['predictive_entropy']:.4f}")
-        print(f"Avg Mutual Information: {metrics['mutual_information']:.4f}")
-        print(f"Avg Prediction Variance: {metrics['avg_prediction_variance']:.4f}")
-        print(f"ECE: {metrics['ece']:.4f}")
+        else:
+            metrics = calculate_regression_uncertainty(ensemble_predictions, ensemble_var_real, ensemble_var_imag, true_results)
 
         return metrics
 
-#         predictions = torch.cat(predictions,dim=0)
-#         mean = torch.mean(predictions, dim=0)
-#         #std = torch.std(predictions, dim=1)
-#         #mean_std = torch.mean(std, dim=0)
-#
-#         print(f"Mean of Predictions: {mean}")
-#         print(f"Std of Predictions: {mean}")
+    def forward(self, x):
+        logits = []
+        for model in self.models:
+            out = model(x)  # logits
+            logits.append(out)
+
+        logits = torch.stack(logits, dim=0)  # [num_models, B, C]
+        mean_logits = logits.mean(dim=0)  # [B, C]
+
+        return mean_logits
+
+
+
 
 
 
