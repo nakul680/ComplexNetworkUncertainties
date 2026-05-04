@@ -309,11 +309,11 @@ class DUQ(nn.Module):
             avg_gp_loss = epoch_gp_loss / len(train_loader)
             accuracy = 100 * correct / total
 
-            print(f"Epoch {epoch + 1} Summary:")
-            print(f"  Average Loss: {avg_loss:.4f}")
-            #print(f"  CE Loss: {avg_ce_loss:.4f} | GP Loss: {avg_gp_loss:.4f}")
-            print(f"  Training Accuracy: {accuracy:.2f}%")
-            print("-" * 60)
+            # print(f"Epoch {epoch + 1} Summary:")
+            # print(f"  Average Loss: {avg_loss:.4f}")
+            # #print(f"  CE Loss: {avg_ce_loss:.4f} | GP Loss: {avg_gp_loss:.4f}")
+            # print(f"  Training Accuracy: {accuracy:.2f}%")
+            # print("-" * 60)
 
             self.val(val_loader, device)
 

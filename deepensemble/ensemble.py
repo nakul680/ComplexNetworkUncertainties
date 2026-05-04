@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 from sklearn.metrics import accuracy_score
 from sympy.printing.pytorch import torch
@@ -16,7 +18,7 @@ from deepensemble.uncertainty import calculate_classification_uncertainty, calcu
 
 
 class DeepEnsemble:
-    def __init__(self, model, num, model_kwargs, task = "classification",device='cuda'):
+    def __init__(self, model, num, model_kwargs, task = "classification",device='cuda', seed = 0):
         self.device = device
         self.num = num
         self.models = []
@@ -26,7 +28,7 @@ class DeepEnsemble:
             raise ValueError(f"task {task} is not supported.")
 
         for i in range(num):
-            torch.manual_seed(i*100)
+            torch.manual_seed(i*seed)
             m = model(**model_kwargs).to(self.device)
             self.models.append(m)
 
@@ -48,8 +50,8 @@ class DeepEnsemble:
                     loss = loss_func(out, val_y)
                     total_metric += (out.argmax(dim=1) == val_y).float().mean().item()
                 else:
-                    mean, var = net(val_x)
-                    loss = loss_func(mean, var, val_y)
+                    mean, var, cov = net(val_x)
+                    loss = loss_func(mean, var, cov, val_y)
                     # .abs() required for complex-valued outputs (squared modulus)
                     total_metric += torch.sqrt((torch.abs(mean - val_y) ** 2).mean()).item()
 
@@ -60,7 +62,10 @@ class DeepEnsemble:
         val_metric_history.append(total_metric / num_batches)
 
     def train_ensemble(self, train_dataloader, val_dataloader, epochs, lr=0.001, loss_func=torch.nn.CrossEntropyLoss()):
+        best_states = {}
         for i, net in enumerate(self.models):
+            best_score = -np.inf
+            best_state = None
             train_loss_history = []
             train_metric_history = []
             val_loss_history = []
@@ -96,8 +101,12 @@ class DeepEnsemble:
                         out = net(x)
                         l = loss_func(out, y)
                     else:
-                        mean, var = net(x)
-                        l = loss_func(mean, var, y)
+                        mean, var, cov = net(x)
+                        l = loss_func(mean, var, cov, y)
+                        # else:
+                        #     mean, var = net(x)
+                        #     l = loss_func(mean, var, y)
+
 
                     l.backward()
                     optimizer.step()
@@ -118,13 +127,18 @@ class DeepEnsemble:
                 train_metric_history.append(avg_metric)
 
                 self.val(net, self.device, val_dataloader, loss_func, val_loss_history, val_metric_history)
+                if val_metric_history[-1] > best_score:
+                    print("Model saved")
+                    best_score = val_metric_history[-1]
+                    best_state = copy.deepcopy(net.state_dict())
 
                 metric_label = "Accuracy" if self.task == 'classification' else "RMSE"
                 print(f"Epoch {epoch + 1}/{epochs} | "
                       f"Train {metric_label}: {avg_metric:.4f} | Train Loss: {avg_loss:.4f} | "
                       f"Val {metric_label}: {val_metric_history[-1]:.4f} | Val Loss: {val_loss_history[-1]:.4f}")
 
-            torch.cuda.empty_cache()
+            best_states[i] = best_state
+            self.models[i].load_state_dict(best_state)
 
 
     def test_ensemble(self, test_dataloader, temp_scaler = None):
@@ -138,6 +152,7 @@ class DeepEnsemble:
         all_mean = []
         all_var_real = []
         all_var_imag = []
+        all_cov = []
         test_loss = 0.0
 
         with torch.no_grad():
@@ -150,6 +165,7 @@ class DeepEnsemble:
                 batch_mean = []
                 batch_var_real = []
                 batch_var_imag = []
+                batch_covar = []
                 for model in self.models:
                     if self.task == 'classification':
                         logits = model(x)
@@ -158,10 +174,11 @@ class DeepEnsemble:
 
                         batch_predictions.append(logits.cpu())
                     else:
-                        mean, var = model(x)
+                        mean, var, cov = model(x)
                         batch_predictions.append(mean.cpu())
                         batch_var_real.append(var[0].cpu())
                         batch_var_imag.append(var[1].cpu())
+                        batch_covar.append(cov.cpu())
 
                     # probs = torch.softmax(logits, dim=1)  # Convert logits to probabilities
 
@@ -169,8 +186,13 @@ class DeepEnsemble:
                 # Stack: (num_models, batch_size, num_classes)
                 batch_predictions = torch.stack(batch_predictions, dim=0)
                 # batch_mean = torch.stack(batch_mean, dim=0)
-                batch_var_real = torch.stack(batch_var_real, dim=0)
-                batch_var_imag = torch.stack(batch_var_imag, dim=0)
+                if self.task == 'regression':
+                    batch_var_real = torch.stack(batch_var_real, dim=0)
+                    batch_var_imag = torch.stack(batch_var_imag, dim=0)
+                    batch_covar = torch.stack(batch_covar, dim=0)
+                    all_var_real.append(batch_var_real)
+                    all_var_imag.append(batch_var_imag)
+                    all_cov.append(batch_covar)
 
                 # Calculate mean prediction for loss
                 mean_pred = batch_predictions.mean(dim=0).to(self.device)
@@ -185,15 +207,16 @@ class DeepEnsemble:
                 all_ensemble_predictions.append(batch_predictions)
                 all_results.append(y.cpu())
                 # all_mean.append(batch_mean)
-                all_var_real.append(batch_var_real)
-                all_var_imag.append(batch_var_imag)
+
 
         # Concatenate all batches
         # Shape: (num_models, total_samples, num_classes)
         ensemble_predictions = torch.cat(all_ensemble_predictions, dim=1).numpy()
         # ensemble_mean = torch.cat(all_mean, dim=1).numpy()
-        ensemble_var_real = torch.cat(all_var_real, dim=1).numpy()
-        ensemble_var_imag = torch.cat(all_var_imag, dim=1).numpy()
+        if self.task == 'regression':
+            ensemble_var_real = torch.cat(all_var_real, dim=1).numpy()
+            ensemble_var_imag = torch.cat(all_var_imag, dim=1).numpy()
+            ensemble_cov = torch.cat(all_cov, dim=1).numpy()
         true_results = torch.cat(all_results, dim=0).numpy()
 
         # Calculate comprehensive uncertainty metrics
@@ -212,7 +235,7 @@ class DeepEnsemble:
             print(f"ECE: {metrics['ece']:.4f}")
 
         else:
-            metrics = calculate_regression_uncertainty(ensemble_predictions, ensemble_var_real, ensemble_var_imag, true_results)
+            metrics = calculate_regression_uncertainty(ensemble_predictions, ensemble_var_real, ensemble_var_imag, ensemble_cov, true_results)
 
         return metrics
 

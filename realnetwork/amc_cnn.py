@@ -11,34 +11,43 @@ class AMC_CNN(nn.Module):
     Output: [batch_size, 11] (11 modulation classes)
     """
     is_complex = False
+    name = "RVCNN"
 
     def __init__(self, num_classes=11):
         super(AMC_CNN, self).__init__()
 
         # Convolutional layers
-        self.conv1 = nn.Conv1d(in_channels=2, out_channels=64, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv1d(in_channels=2, out_channels=64, kernel_size=7, padding=3)
         self.bn1 = nn.BatchNorm1d(64)
         self.pool1 = nn.MaxPool1d(2)  # 128 -> 64
+        # self.dropout3 = nn.Dropout(0.1)
 
-        self.conv2 = nn.Conv1d(64, 128, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv1d(64, 128, kernel_size=5, padding=2)
         self.bn2 = nn.BatchNorm1d(128)
         self.pool2 = nn.MaxPool1d(2)  # 64 -> 32
+        # self.dropout4 = nn.Dropout(0.1)
 
         self.conv3 = nn.Conv1d(128, 256, kernel_size=3, padding=1)
         self.bn3 = nn.BatchNorm1d(256)
         self.pool3 = nn.MaxPool1d(2)  # 32 -> 16
+        # self.dropout5 = nn.Dropout(0.1)
 
         # Fully connected layers
         self.flatten = nn.Flatten()
-        self.fc1 = nn.Linear(256 * 16, 284)
+        self.fc1 = nn.Linear(256 * 16, 1024)
         self.dropout1 = nn.Dropout(0.4)
-        self.fc2 = nn.Linear(284, 128)
+        self.fc2 = nn.Linear(1024, 256)
         self.dropout2 = nn.Dropout(0.2)
-        self.fc3 = nn.Linear(128, num_classes)
+        self.fc3 = nn.Linear(256, num_classes)
 
     def forward(self, x):
         # x: [batch, 2, 128]
-        x = self.pool1(F.relu(self.bn1(self.conv1(x))))
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = self.pool1(x)
+        # x = self.dropout3(x)
+        # x = self.pool1(F.relu(self.bn1(self.conv1(x))))
         x = self.pool2(F.relu(self.bn2(self.conv2(x))))
         x = self.pool3(F.relu(self.bn3(self.conv3(x))))
 
@@ -48,7 +57,6 @@ class AMC_CNN(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.dropout2(x)
         x = self.fc3(x)
-        # x = F.log_softmax(x, dim=1)
         return x
 
     def compute_features(self, x):
@@ -81,17 +89,13 @@ class AMC_CNN(nn.Module):
 
 
 class AMC_MLP(nn.Module):
-    """
-    MLP-based Automatic Modulation Classification Network
-    Input: [batch_size, 2, 128] (2 channels: I/Q, 128 time steps)
-    Output: [batch_size, 11] (11 modulation classes)
-    """
     is_complex = False
+    model_name = "RVMLP"
 
     def __init__(self, num_classes=11, hidden_sizes=[256, 128], dropout=0.5):
         super(AMC_MLP, self).__init__()
 
-        input_size = 2 # flatten 2 channels x 128 length
+        input_size = 2
         self.flatten = nn.Flatten()
 
         layers = []
@@ -109,7 +113,7 @@ class AMC_MLP(nn.Module):
 
     def forward(self, x):
         # x: [batch, 2, 128]
-        x = self.flatten(x)  # [batch, 256]
+        # x = self.flatten(x)  # [batch, 256]
         x = self.mlp(x)
         x = self.output_layer(x)
         # x = torch.softmax(x, dim=1)
@@ -117,6 +121,6 @@ class AMC_MLP(nn.Module):
 
 
     def compute_features(self, x):
-        x = self.flatten(x)  # [batch, 256]
+        # x = self.flatten(x)  # [batch, 256]
         x = self.mlp(x)
         return x

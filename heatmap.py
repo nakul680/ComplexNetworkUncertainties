@@ -203,3 +203,11 @@ def accuracy_rejection_curve(y_true, y_pred, y_prob):
 # plt.grid(True)
 # plt.legend()
 # plt.show()
+
+def make_seeds(experiment_seed):
+    rng = np.random.default_rng(experiment_seed)
+    return {
+        "data":    int(rng.integers(1e6)),
+        "model":   int(rng.integers(1e6)),
+        "dropout": int(rng.integers(1e6)),
+    }

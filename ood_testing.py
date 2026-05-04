@@ -5,10 +5,10 @@ import pickle
 
 from bll_pipeline import bll_experiment
 from complexnetwork.CDSCNN import TrueCDSCNN
-from complexnetwork.complexCNN import ComplexCNN_RLL
+from complexnetwork.complexCNN import ComplexCNN_RLL, ComplexCNN_ABS
 from deepensemblepipeline import ensemble_experiment
 from duq_pipeline import duq_experiment
-from heatmap import count_params
+from heatmap import count_params, make_seeds
 from random_ood_data import RandomOODData
 from realnetwork.amc_cnn import AMC_CNN
 
@@ -29,10 +29,15 @@ if __name__ == "__main__":
     # ---------------------------------------------------
     # 1. SELECT ONE RANDOM CLASS AS OOD
     # ---------------------------------------------------
-    np.random.seed(2016293)
-    #np.random.seed(20011008)
+    # np.random.seed(2016293)
+    # s = 2016293
+    # s = 20011008
+    # s = 8919210
+    # s = 9032480
+    s = 2389213
+    seed = make_seeds(s)
     # ood_class_idx = np.random.choice(len(mods), size=5, replace=False)
-    ood_class_idx = [4,5,8,2,3]
+    ood_class_idx = [4, 5, 8, 2, 3]
     ood_class = [mods[i] for i in ood_class_idx]
 
     print(f"\nOOD Class (removed from train/val): {ood_class}")
@@ -79,6 +84,7 @@ if __name__ == "__main__":
     # ---------------------------------------------------
     # 3. TRAIN/VAL/TEST SPLIT (ID data only)
     # ---------------------------------------------------
+    np.random.seed(seed["data"])
     indices_id = np.arange(N_id)
     np.random.shuffle(indices_id)
 
@@ -156,6 +162,4 @@ if __name__ == "__main__":
     # duq_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(id_mods), 10, 0.0001, ood=True,
     #                  ood_loader=ood_loader)
     ensemble_experiment(AMC_CNN, ComplexCNN_RLL, train_loader, valid_loader, test_loader, len(id_mods),
-                     2, epochs=10, ood=True, ood_loader=ood_loader)
-
-
+                        num_models=5, epochs=10, ood=True, ood_loader=ood_loader, seed=seed["model"])

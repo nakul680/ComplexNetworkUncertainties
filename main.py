@@ -6,7 +6,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 from BLL.bayesianlastlayer import BLLModel
 from bll_pipeline import bll_experiment
-from complexnetwork.complexCNN import ComplexCNN
+from complexnetwork.complexCNN import ComplexCNN_RLL
 from deepensemble.ensemble import DeepEnsemble
 from deepensemblepipeline import ensemble_experiment
 from duq.duq import DUQ
@@ -95,10 +95,10 @@ if __name__ == "__main__":
     # bll_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(mods), 10, 0.0001, ood=True, ood_dataloader=ood_dataloader)
 
 
-    duq_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, len(mods), 10, 0.0001, ood=True, ood_loader=ood_dataloader)
+    # duq_experiment(AMC_CNN, ComplexCNN_RLL, train_loader, valid_loader, test_loader, len(mods), 10, 0.0001, ood=True, ood_loader=ood_dataloader)
 
 
-    #ensemble_experiment(AMC_CNN, ComplexCNN, train_loader, valid_loader, test_loader, output_dim=num_classes,num_models=1, epochs=10)
+    ensemble_experiment(AMC_CNN, ComplexCNN_RLL, train_loader, valid_loader, test_loader, output_dim=num_classes,num_models=1, epochs=10)
 
 
 

@@ -45,7 +45,7 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
     # 0. Convert logits -> probs
     # --------------------------------------------------
     if ensemble_logits.dtype == torch.complex64:
-        probs = softmax_real_with_avg(ensemble_logits, dim = -1)
+        probs = softmax_real_with_avg(ensemble_logits, dim=-1)
         log_probs = torch.log(probs + epsilon)
     else:
         log_probs = F.log_softmax(ensemble_logits, dim=-1)  # (M, N, C)
@@ -87,7 +87,6 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
         id_indices = torch.where(id_mask)[0]
         true_class_probs = mean_probs[id_indices, true_labels[id_indices]]
         nll_per_sample[id_indices] = -torch.log(true_class_probs + epsilon)
-
 
     avg_nll = nll_per_sample[id_mask].mean().item() if id_mask.any() else float('nan')
 
@@ -177,7 +176,6 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
         else float("nan")
     )
 
-
     # --------------------------------------------------
     # 12. Batch-wise metrics (only for ID samples)
     # --------------------------------------------------
@@ -196,8 +194,6 @@ def calculate_classification_uncertainty(ensemble_predictions, true_labels, batc
         else:
             nll_batches.append(float('nan'))
             brier_batches.append(float('nan'))
-
-
 
     return {
         # Overall metrics (ID samples only for supervised metrics)
@@ -270,36 +266,252 @@ def compute_and_plot_auroc(id_scores, ood_scores, label, ax=None):
     return auroc
 
 
-def calculate_regression_uncertainty(ensemble_mean, ensemble_var_real, ensemble_var_imag, true_results):
+def calculate_regression_uncertainty(ensemble_means, ensemble_var_reals, ensemble_var_imags, ensemble_cov, true_results):
+    """
+    Args:
+        ensemble_means     : (n_models, n_samples) complex
+        ensemble_var_reals : (n_models, n_samples) real
+        ensemble_var_imags : (n_models, n_samples) real
+        true_results       : (n_samples,) complex
+    """
+    # --- setup ---
+    means = torch.tensor(ensemble_means, dtype=torch.complex64)  # (n_models, n_samples)
+    var_reals = torch.tensor(ensemble_var_reals, dtype=torch.float32)  # (n_models, n_samples)
+    var_imags = torch.tensor(ensemble_var_imags, dtype=torch.float32)  # (n_models, n_samples)
+    cov = torch.tensor(ensemble_cov, dtype=torch.float32)
+    y = torch.tensor(true_results, dtype=torch.complex64)  # (n_samples,)
 
-    # Get predictions
-    e_var_real = torch.tensor(ensemble_var_real).mean(dim=0)
-    e_var_imag = torch.tensor(ensemble_var_imag).mean(dim=0)
+    mean_real = means.real  # (n_models, n_samples)
+    mean_imag = means.imag
 
-    mean_real = torch.tensor(ensemble_mean.real)
-    mean_imag = torch.tensor(ensemble_mean.imag)
+    # --- mixture aggregation ---
+    mixture_mean = means.mean(dim=0)  # (n_samples,)
 
-    var_e_real = ((mean_real - mean_real.mean(dim=0)) ** 2).mean(dim=0)
-    var_e_imag = ((mean_imag - mean_imag.mean(dim=0)) ** 2).mean(dim=0)
+    e_var_real = var_reals.mean(dim=0)  # aleatoric real
+    e_var_imag = var_imags.mean(dim=0)  # aleatoric imag
+    aleatoric_ri = cov.mean(dim=0)
 
-    mixture_var_real = e_var_real + var_e_real
-    mixture_var_imag = e_var_imag + var_e_imag
+    diff_r = mean_real - mean_real.mean(dim=0)
+    diff_i = mean_imag - mean_imag.mean(dim=0)
+    var_e_real = (diff_r ** 2).mean(dim=0)  # epistemic real
+    var_e_imag = (diff_i ** 2).mean(dim=0)  # epistemic imag
+    epistemic_ri = (diff_r * diff_i).mean(dim=0)
 
-    mixture_mean = torch.tensor(ensemble_mean).mean(dim=0)
+    mixture_var_real = (e_var_real + var_e_real).clamp(min=1e-6)
+    mixture_var_imag = (e_var_imag + var_e_imag).clamp(min=1e-6)
+    total_cov = mixture_var_real + mixture_var_imag
 
+    # convert covariance → rho
+    rho = total_cov / torch.sqrt(mixture_var_real * mixture_var_imag + 1e-6)
 
+    aleatoric = (e_var_real + e_var_imag).mean().item()
+    epistemic = (var_e_real + var_e_imag).mean().item()
+    predictive = aleatoric + epistemic
 
-    # RMSE
-    rmse = torch.sqrt((torch.abs(mixture_mean - true_results) ** 2).mean())
-    print(f"RMSE={rmse:.3f}")
+    # --- RMSE ---
+    rmse = torch.sqrt((torch.abs(mixture_mean - y) ** 2).mean()).item()
 
-    # NLL
+    # --- NLL ---
     loss_func = NegativeLogLossComplex()
-    nll = loss_func(mixture_mean, (mixture_var_real, mixture_var_imag), true_results)
-    print(f"NLL={nll:.3f}")
+    nll = loss_func(mixture_mean, (mixture_var_real, mixture_var_imag), rho, y).item()
 
+    # --- R² ---
+    ss_res = (torch.abs(mixture_mean - y) ** 2).sum()
+    ss_tot = (torch.abs(y - y.mean()) ** 2).sum()
+    r_squared = (1 - ss_res / ss_tot).item()
+
+    # --- PICP ---
+    # proportion of true values falling within the 95% prediction interval
+    # for independent real/imag Gaussians: z_975 = 1.96
+    z = 1.96
+    # z = 3.29
+    in_interval_real = (
+            (y.real >= mixture_mean.real - z * mixture_var_real.sqrt()) &
+            (y.real <= mixture_mean.real + z * mixture_var_real.sqrt())
+    ).float().mean().item()
+
+    in_interval_imag = (
+            (y.imag >= mixture_mean.imag - z * mixture_var_imag.sqrt()) &
+            (y.imag <= mixture_mean.imag + z * mixture_var_imag.sqrt())
+    ).float().mean().item()
+
+    picp = (in_interval_real + in_interval_imag) / 2
+    # well calibrated model should be close to 0.95
+    picp_error = abs(picp - 0.95)
+
+    # --- MPIW ---
+    # mean width of the prediction intervals across real and imaginary parts
+    mpiw_real = (2 * z * mixture_var_real.sqrt()).mean().item()
+    mpiw_imag = (2 * z * mixture_var_imag.sqrt()).mean().item()
+
+    mpiw = (mpiw_real + mpiw_imag) / 2
+
+    # --- calibration curve + ECE ---
+    confidence_levels = torch.linspace(0.01, 0.99, 99)
+    observed_coverage_real = []
+    observed_coverage_imag = []
+
+    for p in confidence_levels:
+        z_p = torch.distributions.Normal(0, 1).icdf((1 + p) / 2)
+
+        cov_real = (
+                (y.real >= mixture_mean.real - z_p * mixture_var_real.sqrt()) &
+                (y.real <= mixture_mean.real + z_p * mixture_var_real.sqrt())
+        ).float().mean().item()
+
+        cov_imag = (
+                (y.imag >= mixture_mean.imag - z_p * mixture_var_imag.sqrt()) &
+                (y.imag <= mixture_mean.imag + z_p * mixture_var_imag.sqrt())
+        ).float().mean().item()
+
+        observed_coverage_real.append(cov_real)
+        observed_coverage_imag.append(cov_imag)
+
+    observed_coverage_real = np.array(observed_coverage_real)
+    observed_coverage_imag = np.array(observed_coverage_imag)
+    expected_coverage = confidence_levels.numpy()
+
+    # ECE — mean absolute deviation from the diagonal
+    ece_real = np.abs(observed_coverage_real - expected_coverage).mean()
+    ece_imag = np.abs(observed_coverage_imag - expected_coverage).mean()
+    ece = (ece_real + ece_imag) / 2
+
+    # --- calibration plot ---
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    for ax, observed, component, ece_val in zip(
+            axes,
+            [observed_coverage_real, observed_coverage_imag],
+            ['Real', 'Imaginary'],
+            [ece_real, ece_imag]
+    ):
+        ax.plot([0, 1], [0, 1], 'k--', label='Perfect calibration')
+        ax.plot(expected_coverage, observed, label=f'Model (ECE={ece_val:.3f})')
+        ax.fill_between(expected_coverage, expected_coverage, observed,
+                        alpha=0.2, color='red', label='Calibration gap')
+        ax.set_xlabel('Expected coverage')
+        ax.set_ylabel('Observed coverage')
+        ax.set_title(f'Calibration curve — {component} part')
+        ax.legend()
+        ax.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+    # Residual vs Prediction Std Dev ---
+    residuals = torch.abs(mixture_mean - y).cpu().numpy()
+    pred_std = torch.sqrt(mixture_var_real + mixture_var_imag).cpu().numpy()
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Scatter plot with color gradient
+    scatter = ax.scatter(pred_std, residuals, alpha=0.6, s=40, c=residuals,
+                         cmap='plasma', edgecolors='black', linewidth=0.5)
+
+    # Add trend line
+    z = np.polyfit(pred_std, residuals, 1)
+    p = np.poly1d(z)
+    x_line = np.linspace(pred_std.min(), pred_std.max(), 100)
+    ax.plot(x_line, p(x_line), "r--", linewidth=2.5, label=f'Trend (slope={z[0]:.3f})')
+
+    # Calculate correlation
+    corr = np.corrcoef(pred_std, residuals)[0, 1]
+
+    ax.set_xlabel('Predicted Standard Deviation', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Absolute Residual', fontsize=12, fontweight='bold')
+    ax.set_title(f'Residual vs Prediction Uncertainty\n(Pearson r = {corr:.3f})',
+                 fontsize=13, fontweight='bold')
+    ax.legend(fontsize=11, loc='upper left')
+    ax.grid(True, alpha=0.3)
+    cbar = plt.colorbar(scatter, ax=ax)
+    cbar.set_label('Residual Magnitude', fontsize=10)
+
+    plt.tight_layout()
+    plt.show()
+
+    # --- VIZ 7: Coverage vs Confidence Level ---
+    # Calculate observed coverage at multiple confidence levels
+    confidence_levels_detailed = torch.linspace(0.50, 0.99, 50)
+    observed_coverage_all = []
+
+    for p in confidence_levels_detailed:
+        z_p = torch.distributions.Normal(0, 1).icdf((1 + p) / 2)
+
+        cov_real = (
+                (y.real >= mixture_mean.real - z_p * mixture_var_real.sqrt()) &
+                (y.real <= mixture_mean.real + z_p * mixture_var_real.sqrt())
+        ).float().mean().item()
+
+        cov_imag = (
+                (y.imag >= mixture_mean.imag - z_p * mixture_var_imag.sqrt()) &
+                (y.imag <= mixture_mean.imag + z_p * mixture_var_imag.sqrt())
+        ).float().mean().item()
+
+        observed_coverage_all.append((cov_real + cov_imag) / 2)
+
+    observed_coverage_all = np.array(observed_coverage_all)
+    confidence_levels_detailed = confidence_levels_detailed.numpy()
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+
+    # Perfect calibration line
+    ax.plot([0.5, 1.0], [0.5, 1.0], 'k--', linewidth=2.5, label='Perfect calibration', alpha=0.7)
+
+    # Observed coverage
+    ax.plot(confidence_levels_detailed, observed_coverage_all, 'o-', linewidth=2.5,
+            markersize=6, label='Model coverage', color='#FF6B6B', markeredgecolor='darkred',
+            markeredgewidth=1)
+
+    # Highlight key confidence levels
+    key_levels = [0.68, 0.90, 0.95, 0.99]
+    for level in key_levels:
+        idx = np.argmin(np.abs(confidence_levels_detailed - level))
+        obs_cov = observed_coverage_all[idx]
+        ax.plot(level, obs_cov, 'D', markersize=10, color='#4ECDC4',
+                markeredgecolor='darkgreen', markeredgewidth=1.5)
+        ax.annotate(f'{obs_cov:.3f}', xy=(level, obs_cov), xytext=(10, 10),
+                    textcoords='offset points', fontsize=9, fontweight='bold',
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.5))
+
+    ax.fill_between(confidence_levels_detailed, confidence_levels_detailed,
+                    observed_coverage_all, alpha=0.2, color='red', label='Calibration gap')
+
+    ax.set_xlabel('Confidence Level', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Observed Coverage', fontsize=12, fontweight='bold')
+    ax.set_title('Coverage vs Confidence Level (Multi-Level PICP)',
+                 fontsize=13, fontweight='bold')
+    ax.set_xlim([0.5, 1.0])
+    ax.set_ylim([0.4, 1.05])
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=11, loc='lower right')
+
+    plt.tight_layout()
+    plt.show()
+
+    # --- print summary ---
+    print(f"RMSE                  = {rmse:.4f}")
+    print(f"NLL                   = {nll:.4f}")
+    print(f"R²                    = {r_squared:.4f}")
+    print(f"PICP (95%)            = {picp:.4f}  (ideal: 0.95, error: {picp_error:.4f})")
+    print(f"MPIW                  = {mpiw:.4f}")
+    print(f"ECE                   = {ece:.4f}  (lower is better)")
+    print(f"Predictive uncertainty = {predictive:.4f}")
+    print(f"  Aleatoric            = {aleatoric:.4f}")
+    print(f"  Epistemic            = {epistemic:.4f}")
 
     return {
         "rmse": rmse,
         "nll": nll,
+        "r_squared": r_squared,
+        "picp": picp,
+        "picp_error": picp_error,
+        "ece": ece,
+        "aleatoric": aleatoric,
+        "epistemic": epistemic,
+        "predictive": predictive,
+        "calibration": {
+            "expected": expected_coverage,
+            "observed_real": observed_coverage_real,
+            "observed_imag": observed_coverage_imag,
+        }
     }
